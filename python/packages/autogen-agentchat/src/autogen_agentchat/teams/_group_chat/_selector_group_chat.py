@@ -1,10 +1,10 @@
 import logging
 import re
-from typing import Callable, Dict, List, Sequence
+from typing import Any, Callable, Dict, List, Mapping, Sequence
 
-from autogen_core.components.models import ChatCompletionClient, SystemMessage
+from autogen_core.models import ChatCompletionClient, SystemMessage
 
-from ... import EVENT_LOGGER_NAME, TRACE_LOGGER_NAME
+from ... import TRACE_LOGGER_NAME
 from ...base import ChatAgent, TerminationCondition
 from ...messages import (
     AgentMessage,
@@ -16,11 +16,11 @@ from ...messages import (
     ToolCallMessage,
     ToolCallResultMessage,
 )
+from ...state import SelectorManagerState
 from ._base_group_chat import BaseGroupChat
 from ._base_group_chat_manager import BaseGroupChatManager
 
 trace_logger = logging.getLogger(TRACE_LOGGER_NAME)
-event_logger = logging.getLogger(EVENT_LOGGER_NAME)
 
 
 class SelectorGroupChatManager(BaseGroupChatManager):
@@ -54,7 +54,7 @@ class SelectorGroupChatManager(BaseGroupChatManager):
         self._allow_repeated_speaker = allow_repeated_speaker
         self._selector_func = selector_func
 
-    async def validate_group_state(self, message: ChatMessage | None) -> None:
+    async def validate_group_state(self, messages: List[ChatMessage] | None) -> None:
         pass
 
     async def reset(self) -> None:
@@ -63,6 +63,20 @@ class SelectorGroupChatManager(BaseGroupChatManager):
         if self._termination_condition is not None:
             await self._termination_condition.reset()
         self._previous_speaker = None
+
+    async def save_state(self) -> Mapping[str, Any]:
+        state = SelectorManagerState(
+            message_thread=list(self._message_thread),
+            current_turn=self._current_turn,
+            previous_speaker=self._previous_speaker,
+        )
+        return state.model_dump()
+
+    async def load_state(self, state: Mapping[str, Any]) -> None:
+        selector_state = SelectorManagerState.model_validate(state)
+        self._message_thread = list(selector_state.message_thread)
+        self._current_turn = selector_state.current_turn
+        self._previous_speaker = selector_state.previous_speaker
 
     async def select_speaker(self, thread: List[AgentMessage]) -> str:
         """Selects the next speaker in a group chat using a ChatCompletion client,
@@ -121,7 +135,7 @@ class SelectorGroupChatManager(BaseGroupChatManager):
             select_speaker_prompt = self._selector_prompt.format(
                 roles=roles, participants=str(participants), history=history
             )
-            select_speaker_messages = [SystemMessage(select_speaker_prompt)]
+            select_speaker_messages = [SystemMessage(content=select_speaker_prompt)]
             response = await self._model_client.create(messages=select_speaker_messages)
             assert isinstance(response.content, str)
             mentions = self._mentioned_agents(response.content, self._participant_topic_types)
@@ -205,10 +219,11 @@ class SelectorGroupChat(BaseGroupChat):
         .. code-block:: python
 
             import asyncio
-            from autogen_ext.models import OpenAIChatCompletionClient
+            from autogen_ext.models.openai import OpenAIChatCompletionClient
             from autogen_agentchat.agents import AssistantAgent
             from autogen_agentchat.teams import SelectorGroupChat
-            from autogen_agentchat.task import TextMentionTermination, Console
+            from autogen_agentchat.conditions import TextMentionTermination
+            from autogen_agentchat.ui import Console
 
 
             async def main() -> None:
@@ -257,16 +272,19 @@ class SelectorGroupChat(BaseGroupChat):
         .. code-block:: python
 
             import asyncio
-            from autogen_ext.models import OpenAIChatCompletionClient
+            from typing import Sequence
+            from autogen_ext.models.openai import OpenAIChatCompletionClient
             from autogen_agentchat.agents import AssistantAgent
             from autogen_agentchat.teams import SelectorGroupChat
-            from autogen_agentchat.task import TextMentionTermination, Console
+            from autogen_agentchat.conditions import TextMentionTermination
+            from autogen_agentchat.ui import Console
+            from autogen_agentchat.messages import AgentMessage
 
 
             async def main() -> None:
                 model_client = OpenAIChatCompletionClient(model="gpt-4o")
 
-                def check_caculation(x: int, y: int, answer: int) -> str:
+                def check_calculation(x: int, y: int, answer: int) -> str:
                     if x + y == answer:
                         return "Correct!"
                     else:
@@ -281,12 +299,12 @@ class SelectorGroupChat(BaseGroupChat):
                 agent2 = AssistantAgent(
                     "Agent2",
                     model_client,
-                    tools=[check_caculation],
+                    tools=[check_calculation],
                     description="For checking calculation",
                     system_message="Check the answer and respond with 'Correct!' or 'Incorrect!'",
                 )
 
-                def selector_func(messages):
+                def selector_func(messages: Sequence[AgentMessage]) -> str | None:
                     if len(messages) == 1 or messages[-1].content == "Incorrect!":
                         return "Agent1"
                     if messages[-1].source == "Agent1":

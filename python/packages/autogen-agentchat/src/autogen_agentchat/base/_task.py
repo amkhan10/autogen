@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from typing import AsyncGenerator, Protocol, Sequence
+from typing import AsyncGenerator, List, Protocol, Sequence
 
-from autogen_core.base import CancellationToken
+from autogen_core import CancellationToken
 
 from ..messages import AgentMessage, ChatMessage
 
@@ -23,7 +23,7 @@ class TaskRunner(Protocol):
     async def run(
         self,
         *,
-        task: str | ChatMessage | None = None,
+        task: str | ChatMessage | List[ChatMessage] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> TaskResult:
         """Run the task and return the result.
@@ -36,7 +36,7 @@ class TaskRunner(Protocol):
     def run_stream(
         self,
         *,
-        task: str | ChatMessage | None = None,
+        task: str | ChatMessage | List[ChatMessage] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> AsyncGenerator[AgentMessage | TaskResult, None]:
         """Run the task and produces a stream of messages and the final result
